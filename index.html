@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Голосование</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main class="container">
+    <section class="card">
+        <div id="loading">Загрузка...</div>
+
+        <div id="poll" hidden>
+            <h1 id="poll-title"></h1>
+            <p id="poll-description" class="description"></p>
+
+            <form id="vote-form">
+                <div id="options" class="options"></div>
+
+                <label>
+                    Никнейм
+                    <input id="nickname" type="text"
+                           minlength="2" maxlength="32"
+                           required autocomplete="nickname"
+                           placeholder="Введите никнейм">
+                </label>
+
+                <button type="submit">Проголосовать</button>
+            </form>
+
+            <div id="message" class="message"></div>
+        </div>
+
+        <div id="no-poll" hidden>
+            <h1>Голосований сейчас нет</h1>
+            <p>Администратор ещё не создал активное голосование.</p>
+        </div>
+    </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

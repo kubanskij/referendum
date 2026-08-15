@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Админ-панель</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main class="container">
+    <section class="card" id="login-card">
+        <h1>Админ-панель</h1>
+
+        <form id="login-form">
+            <label>
+                Логин
+                <input id="username" type="text" required>
+            </label>
+
+            <br>
+
+            <label>
+                Пароль
+                <input id="password" type="password" required>
+            </label>
+
+            <button type="submit">Войти</button>
+        </form>
+
+        <div id="login-message" class="message"></div>
+    </section>
+
+    <section class="card" id="admin-card" hidden>
+        <h1>Администрирование</h1>
+        <button onclick="logout()">Выйти</button>
+
+        <hr>
+
+        <h2>Создать голосование</h2>
+
+        <form id="create-form">
+            <label>
+                Название
+                <input id="poll-title" type="text" maxlength="200" required>
+            </label>
+
+            <br>
+
+            <label>
+                Описание
+                <input id="poll-description" type="text" maxlength="500">
+            </label>
+
+            <br>
+
+            <label>
+                Варианты
+                <textarea id="poll-options" rows="8"
+                          style="width:100%; margin-top:8px;"
+                          placeholder="Первый вариант&#10;Второй вариант&#10;Третий вариант"
+                          required></textarea>
+            </label>
+
+            <button type="submit">Создать голосование</button>
+        </form>
+
+        <div id="create-message" class="message"></div>
+
+        <hr>
+
+        <h2>Голосования</h2>
+        <div id="polls"></div>
+    </section>
+</main>
+
+<script>
+const API = "https://voting-worker.wop099map.workers.dev";
+let token = localStorage.getItem("admin_token");
+
+const loginCard = document.getElementById("login-card");
+const adminCard = document.getElementById("admin-card");
+
+function showAdmin() {
+    if (!token) {
+        loginCard.hidden = false;
+        adminCard.hidden = true;
+        return;
+    }
+
+    loginCard.hidden = true;
+    adminCard.hidden = false;
+    loadPolls();
+}
+
+async function api(path, options = {}) {
+    options.headers = {
+        ...(options.headers || {}),
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/json"
+    };
+
+    const response = await fetch(`${API}${path}`, options);
+
+    if (response.status === 401) {
+        logout();
+        throw new Error("Сессия закончилась");
+    }
+
+    return response.json();
+}
+
+document.getElementById("login-form").addEventListener("submit", async event => {
+    event.preventDefault();
+
+    const username = document.getElementById("username").value;
+    const password = document.getElementById("password").value;
+    const message = document.getElementById("login-message");
+
+    try {
+        const response = await fetch(`${API}/api/admin/login`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            message.textContent = data.error;
+            return;
+        }
+
+        token = data.token;
+        localStorage.setItem("admin_token", token);
+        showAdmin();
+    } catch {
+        message.textContent = "Ошибка подключения";
+    }
+});
+
+document.getElementById("create-form").addEventListener("submit", async event => {
+    event.preventDefault();
+
+    const title = document.getElementById("poll-title").value.trim();
+    const description = document.getElementById("poll-description").value.trim();
+    const options = document.getElementById("poll-options").value
+        .split("\n")
+        .map(x => x.trim())
+        .filter(Boolean);
+
+    const result = await api("/api/admin/polls", {
+        method: "POST",
+        body: JSON.stringify({ title, description, options })
+    });
+
+    document.getElementById("create-message").textContent =
+        result.error || "Голосование создано";
+
+    document.getElementById("create-form").reset();
+    loadPolls();
+});
+
+async function loadPolls() {
+    const data = await api("/api/admin/polls");
+    const container = document.getElementById("polls");
+    container.innerHTML = "";
+
+    for (const poll of data.polls) {
+        const element = document.createElement("div");
+        element.className = "option";
+
+        element.innerHTML = `
+            <div style="width:100%">
+                <strong>${escapeHtml(poll.title)}</strong>
+                <p>Статус: ${poll.active ? "🟢 активно" : "⚪ закрыто"}</p>
+
+                <button onclick="results(${poll.id})">Результаты</button>
+
+                ${poll.active ? `
+                    <button onclick="closePoll(${poll.id})">Закрыть</button>
+                ` : ""}
+
+                <div id="results-${poll.id}"></div>
+            </div>
+        `;
+
+        container.appendChild(element);
+    }
+}
+
+async function results(id) {
+    const data = await api(`/api/admin/results?poll_id=${id}`);
+    const container = document.getElementById(`results-${id}`);
+
+    let html = `<p><strong>Всего: ${data.total}</strong></p>`;
+
+    for (const row of data.results) {
+        const percent = data.total > 0
+            ? (Number(row.votes) / data.total * 100).toFixed(1)
+            : "0.0";
+
+        html += `
+            <p>
+                ${escapeHtml(row.text)}
+                — ${row.votes} (${percent}%)
+            </p>
+        `;
+    }
+
+    container.innerHTML = html;
+}
+
+async function closePoll(id) {
+    if (!confirm("Закрыть это голосование?")) return;
+
+    await api("/api/admin/close", {
+        method: "POST",
+        body: JSON.stringify({ poll_id: id })
+    });
+
+    loadPolls();
+}
+
+function logout() {
+    token = null;
+    localStorage.removeItem("admin_token");
+    showAdmin();
+}
+
+function escapeHtml(value) {
+    return value
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+}
+
+showAdmin();
+</script>
+</body>
+</html>

@@ -32,7 +32,7 @@
 
     <section class="card" id="admin-card" hidden>
         <h1>Администрирование</h1>
-        <button onclick="logout()">Выйти</button>
+        <button type="button" onclick="logout()">Выйти</button>
 
         <hr>
 
@@ -54,12 +54,47 @@
             <br>
 
             <label>
-                Варианты
-                <textarea id="poll-options" rows="8"
-                          style="width:100%; margin-top:8px;"
-                          placeholder="Первый вариант&#10;Второй вариант&#10;Третий вариант"
-                          required></textarea>
+                Варианты ответа
+                <textarea
+                    id="poll-options"
+                    rows="8"
+                    style="width:100%; margin-top:8px;"
+                    placeholder="Первый вариант&#10;Второй вариант&#10;Третий вариант"
+                    required></textarea>
             </label>
+
+            <br>
+
+            <label>
+                <input id="multiple-choice" type="checkbox">
+                Разрешить выбирать несколько вариантов
+            </label>
+
+            <br>
+
+            <label>
+                Срок действия
+                <select id="poll-duration">
+                    <option value="0">Бессрочно</option>
+                    <option value="5">5 минут</option>
+                    <option value="15">15 минут</option>
+                    <option value="30">30 минут</option>
+                    <option value="60">1 час</option>
+                    <option value="360">6 часов</option>
+                    <option value="1440">24 часа</option>
+                    <option value="10080">7 дней</option>
+                    <option value="custom">Своя дата</option>
+                </select>
+            </label>
+
+            <div id="custom-expiry-wrap" hidden>
+                <label>
+                    Дата и время окончания
+                    <input id="custom-expiry" type="datetime-local">
+                </label>
+            </div>
+
+            <br>
 
             <button type="submit">Создать голосование</button>
         </form>
@@ -79,6 +114,12 @@ let token = localStorage.getItem("admin_token");
 
 const loginCard = document.getElementById("login-card");
 const adminCard = document.getElementById("admin-card");
+const durationSelect = document.getElementById("poll-duration");
+const customExpiryWrap = document.getElementById("custom-expiry-wrap");
+
+durationSelect.addEventListener("change", () => {
+    customExpiryWrap.hidden = durationSelect.value !== "custom";
+});
 
 function showAdmin() {
     if (!token) {
@@ -106,7 +147,18 @@ async function api(path, options = {}) {
         throw new Error("Сессия закончилась");
     }
 
-    return response.json();
+    let data = {};
+    try {
+        data = await response.json();
+    } catch {
+        throw new Error(`HTTP ${response.status}`);
+    }
+
+    if (!response.ok) {
+        throw new Error(data.error || `HTTP ${response.status}`);
+    }
+
+    return data;
 }
 
 document.getElementById("login-form").addEventListener("submit", async event => {
@@ -126,14 +178,16 @@ document.getElementById("login-form").addEventListener("submit", async event => 
         const data = await response.json();
 
         if (!response.ok) {
-            message.textContent = data.error;
+            message.textContent = data.error || "Ошибка входа";
             return;
         }
 
         token = data.token;
         localStorage.setItem("admin_token", token);
+        message.textContent = "";
         showAdmin();
-    } catch {
+    } catch (error) {
+        console.error(error);
         message.textContent = "Ошибка подключения";
     }
 });
@@ -141,84 +195,237 @@ document.getElementById("login-form").addEventListener("submit", async event => 
 document.getElementById("create-form").addEventListener("submit", async event => {
     event.preventDefault();
 
+    const message = document.getElementById("create-message");
+
     const title = document.getElementById("poll-title").value.trim();
     const description = document.getElementById("poll-description").value.trim();
+
     const options = document.getElementById("poll-options").value
         .split("\n")
         .map(x => x.trim())
         .filter(Boolean);
 
-    const result = await api("/api/admin/polls", {
-        method: "POST",
-        body: JSON.stringify({ title, description, options })
-    });
+    if (options.length < 2) {
+        message.textContent = "Нужно минимум 2 варианта.";
+        return;
+    }
 
-    document.getElementById("create-message").textContent =
-        result.error || "Голосование создано";
+    const multipleChoice =
+        document.getElementById("multiple-choice").checked;
 
-    document.getElementById("create-form").reset();
-    loadPolls();
+    let expiresAt = null;
+
+    if (durationSelect.value === "custom") {
+        const custom = document.getElementById("custom-expiry").value;
+
+        if (!custom) {
+            message.textContent = "Укажите дату окончания.";
+            return;
+        }
+
+        expiresAt = new Date(custom).toISOString();
+
+        if (new Date(expiresAt) <= new Date()) {
+            message.textContent = "Дата окончания должна быть в будущем.";
+            return;
+        }
+    } else {
+        const minutes = Number(durationSelect.value);
+
+        if (minutes > 0) {
+            expiresAt = new Date(
+                Date.now() + minutes * 60 * 1000
+            ).toISOString();
+        }
+    }
+
+    try {
+        const result = await api("/api/admin/polls", {
+            method: "POST",
+            body: JSON.stringify({
+                title,
+                description,
+                options,
+                multiple_choice: multipleChoice,
+                expires_at: expiresAt
+            })
+        });
+
+        message.textContent =
+            result.error || "Голосование создано";
+
+        document.getElementById("create-form").reset();
+        customExpiryWrap.hidden = true;
+
+        await loadPolls();
+    } catch (error) {
+        console.error(error);
+        message.textContent =
+            error.message || "Не удалось создать голосование";
+    }
 });
 
 async function loadPolls() {
-    const data = await api("/api/admin/polls");
     const container = document.getElementById("polls");
-    container.innerHTML = "";
 
-    for (const poll of data.polls) {
-        const element = document.createElement("div");
-        element.className = "option";
+    try {
+        const data = await api("/api/admin/polls");
 
-        element.innerHTML = `
-            <div style="width:100%">
-                <strong>${escapeHtml(poll.title)}</strong>
-                <p>Статус: ${poll.active ? "🟢 активно" : "⚪ закрыто"}</p>
+        container.innerHTML = "";
 
-                <button onclick="results(${poll.id})">Результаты</button>
+        if (!data.polls || !data.polls.length) {
+            container.innerHTML = "<p>Голосований пока нет.</p>";
+            return;
+        }
 
-                ${poll.active ? `
-                    <button onclick="closePoll(${poll.id})">Закрыть</button>
-                ` : ""}
+        for (const poll of data.polls) {
+            const element = document.createElement("div");
+            element.className = "option";
 
-                <div id="results-${poll.id}"></div>
-            </div>
-        `;
+            const multiple =
+                Boolean(
+                    poll.multiple_choice ??
+                    poll.allow_multiple ??
+                    poll.multi_choice
+                );
 
-        container.appendChild(element);
+            const expiresAt =
+                poll.expires_at || poll.expiresAt || null;
+
+            let expiryText = "";
+
+            if (expiresAt) {
+                const date = new Date(expiresAt);
+
+                if (!Number.isNaN(date.getTime())) {
+                    expiryText =
+                        `<p>Окончание: ${escapeHtml(
+                            date.toLocaleString("ru-RU")
+                        )}</p>`;
+                }
+            }
+
+            element.innerHTML = `
+                <div style="width:100%">
+                    <strong>${escapeHtml(poll.title)}</strong>
+
+                    <p>
+                        Статус:
+                        ${poll.active ? "🟢 активно" : "⚪ закрыто"}
+                    </p>
+
+                    <p>
+                        Тип:
+                        ${multiple
+                            ? "☑ множественный выбор"
+                            : "◉ один вариант"}
+                    </p>
+
+                    ${expiryText}
+
+                    <button
+                        type="button"
+                        onclick="results(${Number(poll.id)})">
+                        Результаты
+                    </button>
+
+                    ${poll.active ? `
+                        <button
+                            type="button"
+                            onclick="closePoll(${Number(poll.id)})">
+                            Закрыть
+                        </button>
+                    ` : ""}
+
+                    <button
+                        type="button"
+                        onclick="deletePoll(${Number(poll.id)}, '${escapeJs(poll.title)}')">
+                        Удалить
+                    </button>
+
+                    <div id="results-${Number(poll.id)}"></div>
+                </div>
+            `;
+
+            container.appendChild(element);
+        }
+    } catch (error) {
+        console.error(error);
+        container.innerHTML =
+            `<p>Не удалось загрузить голосования: ${escapeHtml(error.message)}</p>`;
     }
 }
 
 async function results(id) {
-    const data = await api(`/api/admin/results?poll_id=${id}`);
-    const container = document.getElementById(`results-${id}`);
+    try {
+        const data = await api(`/api/admin/results?poll_id=${id}`);
+        const container = document.getElementById(`results-${id}`);
 
-    let html = `<p><strong>Всего: ${data.total}</strong></p>`;
+        let html =
+            `<p><strong>Всего голосов: ${Number(data.total || 0)}</strong></p>`;
 
-    for (const row of data.results) {
-        const percent = data.total > 0
-            ? (Number(row.votes) / data.total * 100).toFixed(1)
-            : "0.0";
+        for (const row of (data.results || [])) {
+            const percent = Number(data.total) > 0
+                ? (Number(row.votes) / Number(data.total) * 100).toFixed(1)
+                : "0.0";
 
-        html += `
-            <p>
-                ${escapeHtml(row.text)}
-                — ${row.votes} (${percent}%)
-            </p>
-        `;
+            html += `
+                <p>
+                    ${escapeHtml(row.text)}
+                    — ${Number(row.votes)} (${percent}%)
+                </p>
+            `;
+        }
+
+        container.innerHTML = html;
+    } catch (error) {
+        alert(error.message || "Не удалось получить результаты.");
     }
-
-    container.innerHTML = html;
 }
 
 async function closePoll(id) {
-    if (!confirm("Закрыть это голосование?")) return;
+    if (!confirm("Закрыть это голосование?")) {
+        return;
+    }
 
-    await api("/api/admin/close", {
-        method: "POST",
-        body: JSON.stringify({ poll_id: id })
-    });
+    try {
+        await api("/api/admin/close", {
+            method: "POST",
+            body: JSON.stringify({ poll_id: id })
+        });
 
-    loadPolls();
+        await loadPolls();
+    } catch (error) {
+        alert(error.message || "Не удалось закрыть голосование.");
+    }
+}
+
+async function deletePoll(id, title) {
+    const confirmed = confirm(
+        `Удалить голосование "${title}"?\n\n` +
+        `Будут удалены:\n` +
+        `• само голосование\n` +
+        `• все варианты ответа\n` +
+        `• все голоса\n\n` +
+        `Это действие невозможно отменить.`
+    );
+
+    if (!confirmed) {
+        return;
+    }
+
+    try {
+        await api("/api/admin/delete", {
+            method: "POST",
+            body: JSON.stringify({
+                poll_id: id
+            })
+        });
+
+        await loadPolls();
+    } catch (error) {
+        alert(error.message || "Не удалось удалить голосование.");
+    }
 }
 
 function logout() {
@@ -228,12 +435,20 @@ function logout() {
 }
 
 function escapeHtml(value) {
-    return value
+    return String(value)
         .replaceAll("&", "&amp;")
         .replaceAll("<", "&lt;")
         .replaceAll(">", "&gt;")
         .replaceAll('"', "&quot;")
         .replaceAll("'", "&#039;");
+}
+
+function escapeJs(value) {
+    return String(value)
+        .replaceAll("\\", "\\\\")
+        .replaceAll("'", "\\'")
+        .replaceAll("\r", "\\r")
+        .replaceAll("\n", "\\n");
 }
 
 showAdmin();

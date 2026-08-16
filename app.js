@@ -25,22 +25,46 @@ async function loadPoll() {
         }
 
         currentPoll = data.poll;
+
         title.textContent = data.poll.title;
         description.textContent = data.poll.description || "";
         options.innerHTML = "";
 
+        const multiple =
+            Boolean(
+                data.poll.multiple_choice ??
+                data.poll.allow_multiple ??
+                data.poll.multi_choice
+            );
+
         for (const option of data.poll.options) {
             const label = document.createElement("label");
             label.className = "option";
+
+            const inputType = multiple ? "checkbox" : "radio";
+            const required = multiple ? "" : "required";
+
             label.innerHTML = `
-                <input type="radio" name="option" value="${option.id}" required>
+                <input
+                    type="${inputType}"
+                    name="option"
+                    value="${Number(option.id)}"
+                    ${required}>
                 <span>${escapeHtml(option.text)}</span>
             `;
+
             options.appendChild(label);
         }
 
+        if (multiple) {
+            const hint = document.createElement("small");
+            hint.textContent = "Можно выбрать несколько вариантов.";
+            options.prepend(hint);
+        }
+
         poll.hidden = false;
-    } catch {
+    } catch (error) {
+        console.error(error);
         loading.textContent = "Не удалось загрузить голосование.";
     }
 }
@@ -69,20 +93,28 @@ function getBrowserProfile() {
     };
 }
 
-
-
 form.addEventListener("submit", async event => {
     event.preventDefault();
 
     message.textContent = "Проверка и отправка...";
 
-    const selected = document.querySelector(
-        'input[name="option"]:checked'
-    );
+    const selected = [
+        ...document.querySelectorAll(
+            'input[name="option"]:checked'
+        )
+    ];
 
-    if (!selected) {
+    if (!selected.length) {
+        message.textContent = "Выберите хотя бы один вариант.";
         return;
     }
+
+    const multiple =
+        Boolean(
+            currentPoll?.multiple_choice ??
+            currentPoll?.allow_multiple ??
+            currentPoll?.multi_choice
+        );
 
     const turnstileInput = document.querySelector(
         '[name="cf-turnstile-response"]'
@@ -96,27 +128,29 @@ form.addEventListener("submit", async event => {
         return;
     }
 
+    const optionIds = selected.map(input => Number(input.value));
+
+    const payload = {
+        poll_id: currentPoll.id,
+        nickname: nickname.value.trim(),
+        device_id: getDeviceId(),
+        profile: getBrowserProfile(),
+        turnstile_token: turnstileToken
+    };
+
+    if (multiple) {
+        payload.option_ids = optionIds;
+    } else {
+        payload.option_id = optionIds[0];
+    }
+
     try {
         const response = await fetch(`${API}/api/vote`, {
             method: "POST",
-
             headers: {
                 "Content-Type": "application/json"
             },
-
-            body: JSON.stringify({
-                poll_id: currentPoll.id,
-
-                option_id: Number(selected.value),
-
-                nickname: nickname.value.trim(),
-
-                device_id: getDeviceId(),
-
-                profile: getBrowserProfile(),
-
-                turnstile_token: turnstileToken
-            })
+            body: JSON.stringify(payload)
         });
 
         const data = await response.json();
@@ -138,16 +172,14 @@ form.addEventListener("submit", async event => {
         if (window.turnstile) {
             window.turnstile.reset();
         }
-
     } catch (error) {
         console.error(error);
-        message.textContent =
-            "Ошибка соединения с сервером.";
+        message.textContent = "Ошибка соединения с сервером.";
     }
 });
 
 function escapeHtml(value) {
-    return value
+    return String(value)
         .replaceAll("&", "&amp;")
         .replaceAll("<", "&lt;")
         .replaceAll(">", "&gt;")

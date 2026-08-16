@@ -45,35 +45,104 @@ async function loadPoll() {
     }
 }
 
+function getDeviceId() {
+    let id = localStorage.getItem("voting_device_id");
+
+    if (!id) {
+        id = crypto.randomUUID();
+        localStorage.setItem("voting_device_id", id);
+    }
+
+    return id;
+}
+
+function getBrowserProfile() {
+    return {
+        platform: navigator.platform || "",
+        language: navigator.language || "",
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "",
+        screen: `${screen.width}x${screen.height}`,
+        pixelRatio: String(window.devicePixelRatio || 1),
+        cores: String(navigator.hardwareConcurrency || ""),
+        memory: String(navigator.deviceMemory || ""),
+        touch: String(navigator.maxTouchPoints || 0)
+    };
+}
+
+
+
 form.addEventListener("submit", async event => {
     event.preventDefault();
-    message.textContent = "Отправка...";
 
-    const selected = document.querySelector('input[name="option"]:checked');
-    if (!selected) return;
+    message.textContent = "Проверка и отправка...";
+
+    const selected = document.querySelector(
+        'input[name="option"]:checked'
+    );
+
+    if (!selected) {
+        return;
+    }
+
+    const turnstileInput = document.querySelector(
+        '[name="cf-turnstile-response"]'
+    );
+
+    const turnstileToken = turnstileInput?.value || "";
+
+    if (!turnstileToken) {
+        message.textContent =
+            "Пройдите проверку Cloudflare Turnstile.";
+        return;
+    }
 
     try {
         const response = await fetch(`${API}/api/vote`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+
+            headers: {
+                "Content-Type": "application/json"
+            },
+
             body: JSON.stringify({
                 poll_id: currentPoll.id,
+
                 option_id: Number(selected.value),
-                nickname: nickname.value.trim()
+
+                nickname: nickname.value.trim(),
+
+                device_id: getDeviceId(),
+
+                profile: getBrowserProfile(),
+
+                turnstile_token: turnstileToken
             })
         });
 
         const data = await response.json();
 
         if (!response.ok) {
-            message.textContent = data.error || "Не удалось проголосовать.";
+            message.textContent =
+                data.error || "Не удалось проголосовать.";
+
+            if (window.turnstile) {
+                window.turnstile.reset();
+            }
+
             return;
         }
 
         message.textContent = "Голос принят!";
         form.reset();
-    } catch {
-        message.textContent = "Ошибка соединения с сервером.";
+
+        if (window.turnstile) {
+            window.turnstile.reset();
+        }
+
+    } catch (error) {
+        console.error(error);
+        message.textContent =
+            "Ошибка соединения с сервером.";
     }
 });
 
